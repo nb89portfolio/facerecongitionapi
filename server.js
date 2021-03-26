@@ -1,136 +1,85 @@
 const express = require('express');
 const  bcrypt = require('bcryptjs');
 const cors = require('cors');
-
 const app = express();
+const knex = require('knex');
+const register = require('./controllers/register.js');
+const Clarifai = require('clarifai');
 
 app.use(express.json());
 app.use(cors());
 
-const db = {
-    users: [
-        {
-            id: "1",
-            username: "john1234",
-            email: "fake1@email.com",
-            password: "Password1!",
-            entries: 10,
-            joined: new Date()
-        },
-        {
-            id: "2",
-            username: "jane1234",
-            email: "fake2@email.com",
-            password: "password1",
-            entries: 0,
-            joined: new Date()
-        }
-    ]
-};
-
-app.get('/', (req, res) => {
-    res.send('Index: Working');
-});
-
-
-app.post('/register', (req, res) => {
-    const {email, username, password} = req.body;
-
-    // var salt = bcrypt.genSaltSync(10);
-    // var hash = bcrypt.hashSync(password, salt);
-
-    let found = false;
-
-    db.users.forEach(user => {
-        if(user.username === username || user.email === email){
-            found = true;
-            return res.status(400).json('Authentication: Failed.');
-        }
-    })
-
-    if(found === false){
-        db.users.push({
-            id: db.users.length + 1,
-            username: username,
-            email: email,
-            password: password,
-            entries: 0,
-            joined: new Date()
-        });
-
-        return res.json({username: username, email: email});
+const dbServe = knex({
+    client: 'pg',
+    connection: {
+        host: '127.0.0.1',
+        user: 'postgres',
+        password: '262560',
+        database: 'facerec'
     }
 });
+
+const ApiCaller = new Clarifai.App({
+    apiKey: '79d9196056e24c35a8bee192e245acf6'
+});
+
+//app.post('./register', (req, res) => {register.handleregister(req, res, dbServe, bcrypt)})
+app.post('./register', register.handleRegister(dbServe, bcrypt))
 
 app.post('/login', (req, res) => {
-    const {email, password} = req.body;
+    dbServe.select('email', 'hash')
+        .from('login')
+        .where('email', '=', req.body.email)
+        .then(data => {
+            const check = bcrypt.compareSync(req.body.password, data[0].hash);
 
-    let found = false;
-
-    db.users.forEach(user => {
-        if(user.email === email && user.password === password){
-            found = !found;
-            return res.json(user);
-        }
-    })
-
-    if(!found){
-        res.status(400).json('Authentication: Failed.');
-    }
+            if(check){
+                return dbServe.select('*').from('users')
+                .where('email', '=', req.body.email)
+                .then(user => {
+                    res.json(user[0]);
+                }).catch(err => res.status(400).json("cannot find user"));
+            } else {
+                res.status(400).json("Could not sign in");
+            }
+        }).catch(err => res.status(400).json("Wrong credentials"));
 });
 
 app.get('/profile/:id', (req, res) => {
     const {id} = req.params;
 
-    let found = false;
-
-    db.users.forEach(user => {
-        if(user.id === id){
-            found = true;
-            return res.json(user);
-        }
+    dbServe.select('*').from('users').where('email', id).then(user => {
+        if(user.length){
+            res.json(user[0]);
+        } else {
+            res.status(404).json('No User!');
+        }   
+    }).catch(err => {
+        res.status(404).json('error geting user!');
     })
-        
-    if(!found){
-        res.status(404).json('No User!');
-    }
+});
+
+app.post('/url', (req, res) => {
+    ApiCaller.models.predict(
+        Clarifai.FACE_DETECT_MODEL,
+        req.body.input
+    ).then(data => {
+        res.json(data);
+    }).catch(err => res.status(400).json("Api error"));
 });
 
 app.put('/image', (req, res) => {
-    const {id} = req.body;
+    const {email} = req.body;
 
-    let found = false;
-
-    db.users.forEach(user => {
-        if(user.id === id){
-            found = true;
-            user.entries++;
-            return res.json(user.entries);
-        }
-    })
-        
-    if(!found){
-        res.status(404).json('No User!');
-    }
+    dbServe('users')
+    .where('email', '=', email)
+    .increment('entries', 1)
+    .returning('entries')
+    .then(entries => {
+        res.json(entries[0]);
+    }).catch(err => res.status(400).json('unable to get entries'));
 });
 
-
-bcrypt.hash
-
 app.listen(3001, () => {
-    console.log('Port 3000: Working');
+    console.log('Port 3001: Working');
 })
-
-
-/*
-req + spec:
-1.  root
-2.  sign in
-    post = pass/fail
-3.  register
-    post = user data
-4.  profile/:userId
-    get = user data
-5.  image
-    put = user data
-*/
